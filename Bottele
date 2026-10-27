@@ -1,0 +1,132 @@
+import logging
+import sqlite3
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+# Thiết lập logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+ADMIN_ID = 713158004  # ID Admin của ông
+
+# Khởi tạo Database SQLite
+def init_db():
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            balance INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS keys (
+            key_text TEXT PRIMARY KEY,
+            is_used INTEGER DEFAULT 0
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Xin chào! Mình là bot Telegram của bạn.\n\n"
+        "Cách sử dụng nhanh:\n"
+        "/nhanxu — mở 5 nhiệm vụ nhận key\n"
+        "/nhapkey <key> — nhập key hợp lệ để nhận xu\n"
+        "/sodu — xem số dư xu\n"
+        "/doiqua — gửi yêu cầu buff Like Free Fire\n\n"
+        "Gõ /help để xem hướng dẫn đầy đủ."
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Các lệnh người dùng:\n"
+        "/help — xem hướng dẫn\n"
+        "/nhanxu — nhận xu\n"
+        "/sodu — xem số dư xu\n"
+        "/nhapkey <key> — xác thực key\n"
+        "/doiqua — đổi lượt buff Like Free Fire\n\n"
+        "Lệnh admin:\n"
+        "/themkey <key> — thêm key dùng một lần\n"
+        "/congxu <user_id> <số xu> — cộng xu\n"
+        "/truxu <user_id> <số xu> — trừ xu"
+    )
+
+async def sodu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    balance = row[0] if row else 0
+    conn.close()
+    await update.message.reply_text(f"Số dư hiện tại của bạn là: {balance} xu")
+
+async def themkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("Bạn không có quyền dùng lệnh này!")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("Cách dùng: /themkey <key>")
+        return
+
+    key_text = context.args[0]
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO keys (key_text, is_used) VALUES (?, 0)", (key_text,))
+        conn.commit()
+        await update.message.reply_text(f"Đã thêm key thành công: {key_text}")
+    except sqlite3.IntegrityError:
+        await update.message.reply_text("Key này đã tồn tại trong hệ thống!")
+    finally:
+        conn.close()
+
+async def nhapkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Cách dùng: /nhapkey <key>")
+        return
+
+    key_text = context.args[0]
+    conn = sqlite3.connect("bot_data.db")
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT is_used FROM keys WHERE key_text = ?", (key_text,))
+    row = cursor.fetchone()
+    
+    if not row:
+        await update.message.reply_text("Key không tồn tại hoặc không hợp lệ!")
+    elif row[0] == 1:
+        await update.message.reply_text("Key này đã được sử dụng trước đó rồi!")
+    else:
+        cursor.execute("UPDATE keys SET is_used = 1 WHERE key_text = ?", (key_text,))
+        cursor.execute("INSERT INTO users (user_id, balance) VALUES (?, 10) ON CONFLICT(user_id) DO UPDATE SET balance = balance + 10", (user_id,))
+        conn.commit()
+        await update.message.reply_text("Xác thực key thành công! Bạn nhận được 10 xu.")
+    conn.close()
+
+def main():
+    init_db()
+    # Thay thế TOKEN của ông ở đây
+    TOKEN = "854940700:Md6zZ36BZ9UwoX..." 
+    
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("sodu", sodu))
+    app.add_handler(CommandHandler("themkey", themkey))
+    app.add_handler(CommandHandler("nhapkey", nhapkey))
+
+    print("Bot đang chạy...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
