@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 # Cấu hình Token và Admin ID
-TOKEN = "THAY_TOKEN_BOT_VÀO_ĐÂY"
+TOKEN = "8549407085:AAFwhayTF2zZK5QNHMd6zZ36BZ9UwoX9tZ8"
 ADMIN_ID = 7131583374
 
 # Thiết lập logging
