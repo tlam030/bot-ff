@@ -1,7 +1,17 @@
 import logging
 import sqlite3
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+# Cấu hình Token và Admin ID
+TOKEN = "THAY_TOKEN_BOT_VÀO_ĐÂY"
+ADMIN_ID = 7131583374
 
 # Thiết lập logging
 logging.basicConfig(
@@ -10,123 +20,274 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-ADMIN_ID = 713158004  # ID Admin của ông
 
 # Khởi tạo Database SQLite
 def init_db():
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("""
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+  # Bảng người dùng và số dư
+  cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             balance INTEGER DEFAULT 0
         )
     """)
-    cursor.execute("""
+  # Bảng key tương ứng với 5 nhiệm vụ (mission_id từ 1 đến 5)
+  cursor.execute("""
         CREATE TABLE IF NOT EXISTS keys (
-            key_text TEXT PRIMARY KEY,
+            key_string TEXT PRIMARY KEY,
+            mission_id INTEGER,
             is_used INTEGER DEFAULT 0
         )
     """)
-    conn.commit()
-    conn.close()
+  # Bảng lưu trạng thái nhiệm vụ của từng user (0: 🟢 chưa làm, 1: 🔴 đã làm)
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_tasks (
+            user_id INTEGER,
+            mission_id INTEGER,
+            status INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, mission_id)
+        )
+    """)
+  conn.commit()
+  conn.close()
 
+
+init_db()
+
+
+# Hàm xử lý lệnh /start (Hỗ trợ cả Deep Linking /start <key>)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Xin chào! Mình là bot Telegram của bạn.\n\n"
-        "Cách sử dụng nhanh:\n"
-        "/nhanxu — mở 5 nhiệm vụ nhận key\n"
-        "/nhapkey <key> — nhập key hợp lệ để nhận xu\n"
-        "/sodu — xem số dư xu\n"
-        "/doiqua — gửi yêu cầu buff Like Free Fire\n\n"
-        "Gõ /help để xem hướng dẫn đầy đủ."
-    )
+  user_id = update.effective_user.id
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Các lệnh người dùng:\n"
-        "/help — xem hướng dẫn\n"
-        "/nhanxu — nhận xu\n"
-        "/sodu — xem số dư xu\n"
-        "/nhapkey <key> — xác thực key\n"
-        "/doiqua — đổi lượt buff Like Free Fire\n\n"
-        "Lệnh admin:\n"
-        "/themkey <key> — thêm key dùng một lần\n"
-        "/congxu <user_id> <số xu> — cộng xu\n"
-        "/truxu <user_id> <số xu> — trừ xu"
-    )
+  # Đảm bảo user có trong DB
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+  cursor.execute(
+      "INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)", (user_id,)
+  )
+  conn.commit()
 
-async def sodu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+  # 1. Nếu user vào bot qua link rút gọn có kèm key (Deep Linking)
+  if context.args:
+    key_input = context.args[0]
+    cursor.execute(
+        "SELECT mission_id, is_used FROM keys WHERE key_string = ?",
+        (key_input,),
+    )
     row = cursor.fetchone()
-    balance = row[0] if row else 0
-    conn.close()
-    await update.message.reply_text(f"Số dư hiện tại của bạn là: {balance} xu")
 
-async def themkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("Bạn không có quyền dùng lệnh này!")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Cách dùng: /themkey <key>")
-        return
-
-    key_text = context.args[0]
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO keys (key_text, is_used) VALUES (?, 0)", (key_text,))
+    if row:
+      mission_id, is_used = row
+      if is_used == 1:
+        await update.message.reply_text(
+            "❌ Key này đã được sử dụng trước đó rồi!"
+        )
+      else:
+        # Đánh dấu key đã dùng
+        cursor.execute(
+            "UPDATE keys SET is_used = 1 WHERE key_string = ?", (key_input,)
+        )
+        # Cộng 1 xu cho user
+        cursor.execute(
+            "UPDATE users SET balance = balance + 1 WHERE user_id = ?",
+            (user_id,),
+        )
+        # Cập nhật trạng thái nhiệm vụ thành 🔴 (đã hoàn thành)
+        cursor.execute(
+            """INSERT OR REPLACE INTO user_tasks (user_id, mission_id, status)
+                       VALUES (?, ?, 1)""",
+            (user_id, mission_id),
+        )
         conn.commit()
-        await update.message.reply_text(f"Đã thêm key thành công: {key_text}")
-    except sqlite3.IntegrityError:
-        await update.message.reply_text("Key này đã tồn tại trong hệ thống!")
-    finally:
-        conn.close()
-
-async def nhapkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not context.args:
-        await update.message.reply_text("Cách dùng: /nhapkey <key>")
-        return
-
-    key_text = context.args[0]
-    conn = sqlite3.connect("bot_data.db")
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT is_used FROM keys WHERE key_text = ?", (key_text,))
-    row = cursor.fetchone()
-    
-    if not row:
-        await update.message.reply_text("Key không tồn tại hoặc không hợp lệ!")
-    elif row[0] == 1:
-        await update.message.reply_text("Key này đã được sử dụng trước đó rồi!")
+        await update.message.reply_text(
+            f"🎉 Xác thực thành công Nhiệm vụ {mission_id}! Bạn nhận được +1 Xu."
+        )
     else:
-        cursor.execute("UPDATE keys SET is_used = 1 WHERE key_text = ?", (key_text,))
-        cursor.execute("INSERT INTO users (user_id, balance) VALUES (?, 10) ON CONFLICT(user_id) DO UPDATE SET balance = balance + 10", (user_id,))
-        conn.commit()
-        await update.message.reply_text("Xác thực key thành công! Bạn nhận được 10 xu.")
+      await update.message.reply_text("❌ Mã Key không tồn tại trong hệ thống!")
+
     conn.close()
+    return
+
+  conn.close()
+
+  # 2. Gõ /start bình thường
+  welcome_text = (
+      "🤖 **Xin chào! Chào mừng bạn đến với Bot Kiếm Xu.**\n\n"
+      "🔹 **Các lệnh chính:**\n"
+      "• `/nhanxu` — Mở menu 5 nhiệm vụ nhận key\n"
+      "• `/nhapkey <key>` — Nhập key thủ công\n"
+      "• `/sodu` — Xem số dư xu hiện tại\n"
+      "• `/doiqua` — Đổi lượt buff Like Free Fire\n"
+      "• `/help` — Xem hướng dẫn chi tiết"
+  )
+  await update.message.reply_text(welcome_text, parse_mode="Markdown")
+
+
+# Hàm hiển thị 5 nhiệm vụ với trạng thái 🟢 / 🔴
+async def nhanxu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  user_id = update.effective_user.id
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+
+  keyboard = []
+  for i in range(1, 6):
+    cursor.execute(
+        "SELECT status FROM user_tasks WHERE user_id = ? AND mission_id = ?",
+        (user_id, i),
+    )
+    row = cursor.fetchone()
+    status = row[0] if row else 0
+
+    icon = "🔴" if status == 1 else "🟢"
+    # Thay link bên dưới bằng link rút gọn Link4M / Traffic1s của bạn tương ứng với từng nhiệm vụ
+    short_links = {
+        1: "https://link4m.co/your_link_1",
+        2: "https://link4m.co/your_link_2",
+        3: "https://link4m.co/your_link_3",
+        4: "https://link4m.co/your_link_4",
+        5: "https://link4m.co/your_link_5",
+    }
+    link_url = short_links.get(i, "https://t.me/")
+
+    keyboard.append([
+        InlineKeyboardButton(
+            f"Nhiệm vụ {i} (+1 Xu) {icon}", url=link_url
+        )
+    ])
+
+  conn.close()
+  reply_markup = InlineKeyboardMarkup(keyboard)
+  await update.message.reply_text(
+      "📌 **Danh sách nhiệm vụ vượt link kiếm xu:**\nBấm vào các nút bên dưới để làm nhiệm vụ:",
+      reply_markup=reply_markup,
+      parse_mode="Markdown",
+  )
+
+
+# Hàm kiểm tra số dư /sodu
+async def sodu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  user_id = update.effective_user.id
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+  cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+  row = cursor.fetchone()
+  balance = row[0] if row else 0
+  conn.close()
+
+  await update.message.reply_text(f"💰 Số dư hiện tại của bạn là: **{balance} Xu**", parse_mode="Markdown")
+
+
+# Hàm nhập key thủ công /nhapkey
+async def nhapkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  user_id = update.effective_user.id
+  if not context.args:
+    await update.message.reply_text(
+        "⚠️ Vui lòng nhập đúng cú pháp: `/nhapkey <ma_key>`", parse_mode="Markdown"
+    )
+    return
+
+  key_input = context.args[0]
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+  cursor.execute(
+      "SELECT mission_id, is_used FROM keys WHERE key_string = ?", (key_input,)
+  )
+  row = cursor.fetchone()
+
+  if row:
+    mission_id, is_used = row
+    if is_used == 1:
+      await update.message.reply_text("❌ Key này đã được sử dụng rồi!")
+    else:
+      cursor.execute(
+          "UPDATE keys SET is_used = 1 WHERE key_string = ?", (key_input,)
+      )
+      cursor.execute(
+          "UPDATE users SET balance = balance + 1 WHERE user_id = ?", (user_id,)
+      )
+      cursor.execute(
+          """INSERT OR REPLACE INTO user_tasks (user_id, mission_id, status)
+                   VALUES (?, ?, 1)""",
+          (user_id, mission_id),
+      )
+      conn.commit()
+      await update.message.reply_text(
+          f"🎉 Nhập key thành công! Bạn nhận được +1 Xu từ nhiệm vụ {mission_id}."
+      )
+  else:
+    await update.message.reply_text("❌ Mã key không hợp lệ!")
+
+  conn.close()
+
+
+# Lệnh /doiqua
+async def doiqua(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  await update.message.reply_text(
+      "🎁 **Đổi quà Free Fire:**\nVui lòng nhắn tin trực tiếp cho Admin để yêu cầu buff like khi bạn đã tích đủ xu."
+  )
+
+
+# Lệnh /help
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  help_text = (
+      "📖 **Hướng dẫn sử dụng Bot:**\n"
+      "• `/start` — Khởi động bot & xác thực key tự động\n"
+      "• `/nhanxu` — Nhận link vượt nhiệm vụ\n"
+      "• `/sodu` — Kiểm tra số xu\n"
+      "• `/nhapkey <key>` — Xác thực key thủ công\n"
+      "• `/doiqua` — Đổi thưởng Free Fire"
+  )
+  await update.message.reply_text(help_text, parse_mode="Markdown")
+
+
+# Lệnh Admin: Thêm key vào hệ thống (/themkey <mission_id> <key>)
+async def themkey(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  user_id = update.effective_user.id
+  if user_id != ADMIN_ID:
+    await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này!")
+    return
+
+  if len(context.args) < 2:
+    await update.message.reply_text(
+        "⚠️ Cú pháp: `/themkey <nhiem_vu_id> <ma_key>`", parse_mode="Markdown"
+    )
+    return
+
+  mission_id = context.args[0]
+  key_string = context.args[1]
+
+  conn = sqlite3.connect("bot_data.db")
+  cursor = conn.cursor()
+  try:
+    cursor.execute(
+        "INSERT INTO keys (key_string, mission_id, is_used) VALUES (?, ?, 0)",
+        (key_string, mission_id),
+    )
+    conn.commit()
+    await update.message.reply_text(
+        f"✅ Đã thêm key `{key_string}` cho nhiệm vụ {mission_id} thành công!"
+    )
+  except sqlite3.IntegrityError:
+    await update.message.reply_text("❌ Key này đã tồn tại trong database!")
+  conn.close()
+
 
 def main():
-    init_db()
-    # Thay thế TOKEN của ông ở đây
-    TOKEN = "854940700:Md6zZ36BZ9UwoX..." 
-    
-    app = ApplicationBuilder().token(TOKEN).build()
+  app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("sodu", sodu))
-    app.add_handler(CommandHandler("themkey", themkey))
-    app.add_handler(CommandHandler("nhapkey", nhapkey))
+  # Đăng ký các Handler lệnh
+  app.add_handler(CommandHandler("start", start))
+  app.add_handler(CommandHandler("nhanxu", nhanxu))
+  app.add_handler(CommandHandler("sodu", sodu))
+  app.add_handler(CommandHandler("nhapkey", nhapkey))
+  app.add_handler(CommandHandler("doiqua", doiqua))
+  app.add_handler(CommandHandler("help", help_command))
+  app.add_handler(CommandHandler("themkey", themkey))
 
-    print("Bot đang chạy...")
-    app.run_polling()
+  print("🤖 Bot đang chạy...")
+  app.run_polling()
+
 
 if __name__ == "__main__":
-    main()
+  main()
