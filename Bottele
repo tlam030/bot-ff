@@ -142,11 +142,11 @@ async def nhanxu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     icon = "🔴" if status == 1 else "🟢"
     # Thay link bên dưới bằng link rút gọn Link4M / Traffic1s của bạn tương ứng với từng nhiệm vụ
     short_links = {
-        1: "https://link4m.co/your_link_1",
-        2: "https://link4m.co/your_link_2",
-        3: "https://link4m.co/your_link_3",
-        4: "https://link4m.co/your_link_4",
-        5: "https://link4m.co/your_link_5",
+        1: "https://gtraffic.io/5QxyQlt",
+        2: "https://gtraffic.io/QHyx5Yx",
+        3: "https://link4m.org/h8k15",
+        4: "https://link4m.net/h8k15",
+        5: "https://linkfree.click/s/keyz1u1cqdmvqi0r4n",
     }
     link_url = short_links.get(i, "https://t.me/")
 
